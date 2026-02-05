@@ -51,7 +51,6 @@ print(f"Training Data Shape: {X_train.shape}")
 model = Sequential()
 model.add(Input(shape=(30, 1662)))
 
-# SIMPLIFIED ARCHITECTURE
 # Layer 1: LSTM (Fast learner)
 model.add(LSTM(64, return_sequences=True, activation='relu'))
 
@@ -64,16 +63,11 @@ model.add(Dense(32, activation='relu'))
 # Output Layer
 model.add(Dense(actions.shape[0], activation='softmax'))
 
-# COMPILE
-# We use a specific learning rate to prevent "guessing"
 optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
 model.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['categorical_accuracy'])
 
-# TRAIN FOR LONGER
-# 200 epochs is not enough for 20 words. Go to 600 or 1000.
 model.fit(X_train, y_train, epochs=500, callbacks=[TensorBoard(log_dir='Logs')])
 model.save('action.keras')
 
-# (Optional) Evaluate on test data
 loss, accuracy = model.evaluate(X_test, y_test)
 print(f"Test Accuracy: {accuracy*100:.2f}%")
