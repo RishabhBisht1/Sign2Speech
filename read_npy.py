@@ -2,7 +2,7 @@ import numpy as np
 import os
 
 # Change this to the path of one of your files
-file_path = os.path.join('dataset', 'Hello', '0.npy') 
+file_path = os.path.join('dataset', 'Hello', '0.npy')
 
 if os.path.exists(file_path):
     data = np.load(file_path)
