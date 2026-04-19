@@ -20,58 +20,61 @@ print(f"Loaded labels: {actions}")
 
 mp_holistic = mp.solutions.holistic
 mp_drawing = mp.solutions.drawing_utils 
-mp_drawing_styles = mp.solutions.drawing_styles
 
+# --- VARIABLES ---
 sequence = []
-sentence = []
+sentence = []      # ADDED THIS BACK
 threshold = 0.7 
 
+# Variables for Motion Detection
+previous_keypoints = None
+motion_threshold = 0.03 # Higher = less sensitive. Lower = more sensitive.
+is_recording = False
+
+# --- EXTRACT AND NORMALIZE KEYPOINTS (Shoulder Anchors Included) ---
 def extract_keypoints(results):
-    # --- 1. FIND THE ANCHOR POINT ---
+    # 1. FIND THE ANCHOR POINT (Chest)
     if results.pose_landmarks:
-        # Get Left Shoulder (11) and Right Shoulder (12)
         l_shoulder = results.pose_landmarks.landmark[11]
         r_shoulder = results.pose_landmarks.landmark[12]
-        
-        # Calculate the midpoint between shoulders (the chest)
         anchor_x = (l_shoulder.x + r_shoulder.x) / 2
         anchor_y = (l_shoulder.y + r_shoulder.y) / 2
     else:
-        # Fallback if no body is detected
         anchor_x, anchor_y = 0.0, 0.0
 
-    # --- 2. EXTRACT AND NORMALIZE POSE ---
+    # 2. EXTRACT POSE
     if results.pose_landmarks:
-        # Notice we subtract anchor_x and anchor_y from res.x and res.y
         pose = np.array([[res.x - anchor_x, res.y - anchor_y, res.z, res.visibility] 
                          for res in results.pose_landmarks.landmark]).flatten()
     else:
         pose = np.zeros(33*4)
         
-    # (Face landmarks are completely ignored here to keep the shape at 258)
+    # (Face is ignored to match the new 258-shape model)
 
-    # --- 3. EXTRACT AND NORMALIZE LEFT HAND ---
+    # 3. EXTRACT LEFT HAND
     if results.left_hand_landmarks:
         lh = np.array([[res.x - anchor_x, res.y - anchor_y, res.z] 
                        for res in results.left_hand_landmarks.landmark]).flatten()
     else:
         lh = np.zeros(21*3)
 
-    # --- 4. EXTRACT AND NORMALIZE RIGHT HAND ---
+    # 4. EXTRACT RIGHT HAND
     if results.right_hand_landmarks:
         rh = np.array([[res.x - anchor_x, res.y - anchor_y, res.z] 
                        for res in results.right_hand_landmarks.landmark]).flatten()
     else:
         rh = np.zeros(21*3)
         
-    # Return the normalized Pose + Hands (132 + 63 + 63 = 258)
     return np.concatenate([pose, lh, rh])
 
+# --- MAIN CAMERA LOOP ---
 cap = cv2.VideoCapture(0)
-
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
+# Turn the model on, let me use it inside this indented block of code, and the absolute microsecond I am done or the script crashes, automatically shut it down and release the webcam. If we didn't use this, a crashed script would leave your webcam light on, and we'd have to force-quit Python to use our camera again.
+
+# MediaPipe has separate models for Face Mesh, Pose tracking, and Hand tracking. The Holistic model is a specialized, optimized pipeline that runs all of them simultaneously in a coordinated way so your CPU doesn't melt hehe.
 with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
     while cap.isOpened():
         ret, frame = cap.read()
@@ -83,60 +86,71 @@ with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=
         image.flags.writeable = True
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         
-        mp_drawing.draw_landmarks(
-            image, 
-            results.face_landmarks, 
-            mp_holistic.FACEMESH_TESSELATION, 
-
-            mp_drawing.DrawingSpec(color=(80, 255, 255), thickness=1, circle_radius=1),
-
-            mp_drawing.DrawingSpec(color=(0, 256, 128), thickness=1, circle_radius=1)
-        )
-
-        mp_drawing.draw_landmarks(
-            image, 
-            results.face_landmarks, 
-            mp_holistic.FACEMESH_CONTOURS, 
-            mp_drawing.DrawingSpec(color=(80, 255, 255), thickness=1, circle_radius=1),
-            mp_drawing.DrawingSpec(color=(80, 255, 255), thickness=1, circle_radius=1)
-        )
-
+        # Draw Landmarks (Removed the dense face mesh drawing to keep the screen cleaner)
         mp_drawing.draw_landmarks(image, results.left_hand_landmarks, mp_holistic.HAND_CONNECTIONS)
         mp_drawing.draw_landmarks(image, results.right_hand_landmarks, mp_holistic.HAND_CONNECTIONS)
+        mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_holistic.POSE_CONNECTIONS)
 
+        # --- PREDICTION LOGIC ---
         if results.left_hand_landmarks or results.right_hand_landmarks:
             keypoints = extract_keypoints(results)
-            sequence.append(keypoints)
-            sequence = sequence[-30:] 
             
-            if len(sequence) == 30:
-                res = model.predict(np.expand_dims(sequence, axis=0), verbose=0)[0]
+            # 1. Motion Detection Trigger
+            if previous_keypoints is not None:
+                movement = np.mean(np.abs(keypoints - previous_keypoints))
                 
-                best_class_index = np.argmax(res)
-                confidence = res[best_class_index]
-                prediction = actions[best_class_index]
+                if not is_recording and movement > motion_threshold:
+                    is_recording = True
+                    sequence = [] # Clear old data
+            
+            previous_keypoints = keypoints 
+
+            # 2. Sequence Building
+            if is_recording:
+                sequence.append(keypoints)
+                cv2.putText(image, f"Recording Sign... {len(sequence)}/30", (10, 70), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
                 
-                if confidence > threshold:
-                    if len(sentence) > 0:
-                        if prediction != sentence[-1]:
+                # 3. Predict exactly when we hit 30 frames
+                if len(sequence) == 30:
+                    res = model.predict(np.expand_dims(sequence, axis=0), verbose=0)[0]
+                    
+                    best_class_index = np.argmax(res)
+                    confidence = res[best_class_index]
+                    prediction = actions[best_class_index]
+                    
+                    if confidence > threshold:
+                        if len(sentence) > 0:
+                            if prediction != sentence[-1]:
+                                sentence.append(prediction)
+                        else:
                             sentence.append(prediction)
-                    else:
-                        sentence.append(prediction)
 
-                if len(sentence) > 5:
-                    sentence = sentence[-5:]
-
-                cv2.rectangle(image, (0,0), (640, 40), (245, 117, 16), -1)
-                cv2.putText(image, f"{prediction} ({confidence*100:.1f}%)", (10,30), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+                    if len(sentence) > 5:
+                        sentence = sentence[-5:]
+                    
+                    # Reset after predicting
+                    is_recording = False
+                    sequence = [] 
         else:
-            cv2.putText(image, "Waiting for hands...", (10,30), 
+            # If hands disappear, reset tracker
+            previous_keypoints = None
+            is_recording = False
+            sequence = []
+            cv2.putText(image, "Waiting for hands...", (10, 70), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
+
+        # UI Updates
+        cv2.rectangle(image, (0,0), (640, 40), (245, 117, 16), -1)
+        
+        display_text = " ".join(sentence)
+        cv2.putText(image, display_text, (10, 30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
 
         cv2.imshow('Sign Language Detector', image)
 
         if cv2.waitKey(10) & 0xFF == ord('q'):
             break
 
-    cap.release()
-    cv2.destroyAllWindows()
+cap.release()
+cv2.destroyAllWindows()
