@@ -15,45 +15,45 @@ mp_drawing=mp.solutions.drawing_utils
 
 # we use shoulders as anchor point so even if the signs are made on sides of camera it still works
 def extract_keypoints(results):
-    # --- 1. FIND THE ANCHOR POINT ---
+    # --- 1. FIND THE ANCHOR POINT (Chest) ---
     if results.pose_landmarks:
-        # Get Left Shoulder (11) and Right Shoulder (12)
         l_shoulder = results.pose_landmarks.landmark[11]
         r_shoulder = results.pose_landmarks.landmark[12]
-        
-        # Calculate the midpoint between shoulders (the chest)
         anchor_x = (l_shoulder.x + r_shoulder.x) / 2
         anchor_y = (l_shoulder.y + r_shoulder.y) / 2
     else:
-        # Fallback if no body is detected
         anchor_x, anchor_y = 0.0, 0.0
 
-    # --- 2. EXTRACT AND NORMALIZE POSE ---
+    # --- 2. EXTRACT POSE ---
     if results.pose_landmarks:
-        # Notice we subtract anchor_x and anchor_y from res.x and res.y
         pose = np.array([[res.x - anchor_x, res.y - anchor_y, res.z, res.visibility] 
                          for res in results.pose_landmarks.landmark]).flatten()
     else:
         pose = np.zeros(33*4)
         
-    # (Face landmarks are completely ignored here to keep the shape at 258)
+    # --- 3. EXTRACT FACE (WE KEEP THIS FOR THE DATASET) ---
+    if results.face_landmarks:
+        face = np.array([[res.x - anchor_x, res.y - anchor_y, res.z] 
+                         for res in results.face_landmarks.landmark]).flatten()
+    else:
+        face = np.zeros(468*3)
 
-    # --- 3. EXTRACT AND NORMALIZE LEFT HAND ---
+    # --- 4. EXTRACT LEFT HAND ---
     if results.left_hand_landmarks:
         lh = np.array([[res.x - anchor_x, res.y - anchor_y, res.z] 
                        for res in results.left_hand_landmarks.landmark]).flatten()
     else:
         lh = np.zeros(21*3)
 
-    # --- 4. EXTRACT AND NORMALIZE RIGHT HAND ---
+    # --- 5. EXTRACT RIGHT HAND ---
     if results.right_hand_landmarks:
         rh = np.array([[res.x - anchor_x, res.y - anchor_y, res.z] 
                        for res in results.right_hand_landmarks.landmark]).flatten()
     else:
         rh = np.zeros(21*3)
         
-    # Return the normalized Pose + Hands (132 + 63 + 63 = 258)
-    return np.concatenate([pose, lh, rh])
+    # Return Pose + Face + Hands (132 + 1404 + 63 + 63 = 1662)
+    return np.concatenate([pose, face, lh, rh])
 
 
 action_name=input("Enter the word you want to record: ").strip()
