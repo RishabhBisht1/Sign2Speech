@@ -1,73 +1,162 @@
 import numpy as np
 import os
+import matplotlib.pyplot as plt
+
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix
+
+import tensorflow as tf
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
-from tensorflow.keras.callbacks import TensorBoard
+from tensorflow.keras.callbacks import TensorBoard, EarlyStopping
 
-DATA_PATH = os.path.join('dataset') 
+# =========================
+# LOAD DATA
+# =========================
+DATA_PATH = os.path.join('datasetV')
 
-# Get the list of actions (words) directly from the folder names
-# dataset/Hello, dataset/Thanks, etc.
-actions = np.array(os.listdir(DATA_PATH))
+actions = np.array(sorted(os.listdir(DATA_PATH)))
 print(f"Detected Actions: {actions}")
 
-label_map={label:num for num,label in enumerate(actions)}
+label_map = {label: num for num, label in enumerate(actions)}
 
-sequences,labels=[],[]
+sequences, labels = [], []
 
-print("Loading data... (This might take a few seconds)")
-
-
-
+print("Loading data...")
 
 for action in actions:
     action_path = os.path.join(DATA_PATH, action)
-    file_names = os.listdir(action_path)
-    
-    for file_name in file_names:
+
+    for file_name in os.listdir(action_path):
         if file_name.endswith('.npy'):
-            # Load file
             window = np.load(os.path.join(action_path, file_name))
-            
-            # Append to our big list
             sequences.append(window)
             labels.append(label_map[action])
 
-print(f"Loaded {len(sequences)} videos total.")
+print(f"Loaded {len(sequences)} samples.")
 
 X = np.array(sequences)
-y = to_categorical(labels).astype(int) # Converts [0, 1, 0] -> [1,0,0], [0,1,0]...
+y = to_categorical(labels).astype(int)
 
+# =========================
+# TRAIN-TEST SPLIT
+# =========================
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y,
+    test_size=0.2,
+    random_state=42,shuffle=True,stratify=y
+)
 
-X_train, X_test, y_train, y_test=train_test_split(X,y,test_size=0.05)
+print(f"Training Shape: {X_train.shape}")
 
-print(f"Training Data Shape: {X_train.shape}")
-
-
-
-
+# =========================
+# MODEL
+# =========================
 model = Sequential()
 model.add(Input(shape=(30, 1662)))
 
-# Layer 1: LSTM (Fast learner)
-model.add(LSTM(64, return_sequences=True, activation='relu'))
+model.add(LSTM(64, return_sequences=True, activation='tanh'))
+model.add(Dropout(0.2))
 
-# Layer 2: LSTM (Consolidator)
-model.add(LSTM(32, return_sequences=False, activation='relu'))
+model.add(LSTM(32, return_sequences=False, activation='tanh'))
+model.add(Dropout(0.2))
 
-# Layer 3: Dense (Decision maker)
 model.add(Dense(32, activation='relu'))
-
-# Output Layer
 model.add(Dense(actions.shape[0], activation='softmax'))
 
 optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
-model.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['categorical_accuracy'])
 
-model.fit(X_train, y_train, epochs=500, callbacks=[TensorBoard(log_dir='Logs')])
+model.compile(
+    optimizer=optimizer,
+    loss='categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+model.summary()
+
+# =========================
+# CALLBACKS
+# =========================
+early_stop = EarlyStopping(
+    monitor='val_loss',
+    patience=15,
+    restore_best_weights=True
+)
+
+tensorboard = TensorBoard(log_dir='Logs')
+
+# =========================
+# TRAINING
+# =========================
+history = model.fit(
+    X_train, y_train,
+    epochs=100,
+    validation_data=(X_test, y_test),
+    callbacks=[early_stop, tensorboard]
+)
+
+# =========================
+# SAVE MODEL
+# =========================
 model.save('action.keras')
 
+# =========================
+# EVALUATION
+# =========================
 loss, accuracy = model.evaluate(X_test, y_test)
-print(f"Test Accuracy: {accuracy*100:.2f}%")
+print(f"\nTest Accuracy: {accuracy*100:.2f}%")
+
+# =========================
+# PREDICTIONS (FIXED PART)
+# =========================
+y_pred = model.predict(X_test)
+y_pred_classes = np.argmax(y_pred, axis=1)
+
+y_true = np.argmax(y_test, axis=1)
+
+# =========================
+# CLASSIFICATION REPORT
+# =========================
+labels_present = np.unique(y_true)
+
+print("\nClassification Report:\n")
+
+print(classification_report(
+    y_true,
+    y_pred_classes,
+    labels=labels_present,
+    target_names=[actions[i] for i in labels_present]
+))
+
+# =========================
+# CONFUSION MATRIX (OPTIONAL BUT IMPORTANT)
+# =========================
+import seaborn as sns
+
+cm = confusion_matrix(y_true, y_pred_classes)
+
+plt.figure(figsize=(10, 8))
+sns.heatmap(cm, annot=True, fmt='d', xticklabels=actions, yticklabels=actions)
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.title("Confusion Matrix")
+plt.show()
+
+# =========================
+# ACCURACY PLOT
+# =========================
+plt.figure(figsize=(10, 5))
+
+plt.plot(history.history['accuracy'], label='Train Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+
+plt.title('Model Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.grid()
+
+plt.show()
+
+print("\nTraining Completed Successfully")

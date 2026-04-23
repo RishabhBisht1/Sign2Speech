@@ -9,7 +9,7 @@ import mediapipe as mp
 
 model = load_model('action.keras')
 
-DATA_PATH = os.path.join('dataset')
+DATA_PATH = os.path.join('datasetV')
 
 if os.path.exists(DATA_PATH):
     actions = np.array(sorted(os.listdir(DATA_PATH)))

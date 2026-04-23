@@ -6,9 +6,9 @@ import os
 import mediapipe as mp
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH = os.path.abspath(os.path.join(BASE_DIR, '..', 'dataset'))
+DATA_PATH = os.path.abspath(os.path.join(BASE_DIR, 'datasetV'))
 SEQUENCE_LENGTH=30 # Frames per video
-
+Sentence Construction and Deduplication
 mp_holistic=mp.solutions.holistic
 mp_drawing=mp.solutions.drawing_utils
 
