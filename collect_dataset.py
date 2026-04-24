@@ -1,4 +1,6 @@
-# Data Generator. It turns on the webcam, runs MediaPipe Holistic to find the body/hand landmarks, and records exactly 30 frames of motion when you press the spacebar. It then flattens those points and saves them into the dataset/ folder as .npy files.
+# Data Generator. It turns on the webcam, runs MediaPipe Holistic to find the body/hand landmarks, 
+# and records exactly 30 frames of motion when you press the spacebar. 
+# It then flattens those points and saves them into the datasetV folder as .npy files.
 
 import cv2
 import numpy as np
