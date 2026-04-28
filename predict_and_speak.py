@@ -10,16 +10,20 @@ import google.generativeai as genai
 import pyttsx3
 import pythoncom
 import win32com.client
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 # 1. API & NLP SETUP
-# Replace with your actual Gemini API Key
-genai.configure(api_key="API_KEY")
+genai.configure(api_key=os.getenv("API_KEY"))
 
 system_instruction = """
 You are a highly efficient Indian Sign Language (ISL) to English translator. 
 I will give you a sequence of raw translated words (glosses). 
 Your job is to convert them into a single, grammatically correct, natural English sentence.
 Do not add any conversational filler. Only output the final sentence.
+If it is a single word salutation like "HELLO", respond with "Hello!".
 Example Input: "WHERE HOSPITAL" -> Output: "Where is the hospital?"
 Example Input: "YOU NAME WHAT" -> Output: "What is your name?"
 """
