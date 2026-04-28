@@ -7,7 +7,7 @@ import os
 from tensorflow.keras.models import load_model
 import mediapipe as mp
 
-model = load_model('action.keras')
+model = load_model('action2.keras')
 
 DATA_PATH = os.path.join('datasetV')
 

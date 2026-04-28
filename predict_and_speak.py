@@ -3,14 +3,17 @@ import numpy as np
 import os
 import time
 import threading
+import queue
 from tensorflow.keras.models import load_model
 import mediapipe as mp
 import google.generativeai as genai
 import pyttsx3
+import pythoncom
+import win32com.client
 
 # 1. API & NLP SETUP
 # Replace with your actual Gemini API Key
-genai.configure(api_key="YOUR_API_KEY_HERE")
+genai.configure(api_key="API_KEY")
 
 system_instruction = """
 You are a highly efficient Indian Sign Language (ISL) to English translator. 
@@ -23,19 +26,41 @@ Example Input: "YOU NAME WHAT" -> Output: "What is your name?"
 
 # Initialize Gemini 1.5 Flash (Fastest model for text)
 nlp_model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
+    model_name="gemini-2.5-flash",
     system_instruction=system_instruction
 )
 
-# Initialize Offline Text-to-Speech
-engine = pyttsx3.init()
-engine.setProperty('rate', 150) # Speed of speech
+# --- DEDICATED SPEAKER THREAD ---
+speech_queue = queue.Queue()
+
+def tts_worker():
+    """This function runs forever in the background, natively speaking text"""
+    # Register thread with Windows
+    pythoncom.CoInitialize()
+    
+    # Initialize the Native Windows Speaker (Bypassing pyttsx3)
+    speaker = win32com.client.Dispatch("SAPI.SpVoice")
+    
+    # Optional: Set the speed (Range is usually -10 to 10, 0 is normal)
+    speaker.Rate = 1 
+    
+    while True:
+        text = speech_queue.get() 
+        if text is None: 
+            break
+        
+        # Native speak command (this does not deadlock like runAndWait)
+        speaker.Speak(text) 
+        speech_queue.task_done()
+
+# Start the speaker thread ONCE when the program loads
+threading.Thread(target=tts_worker, daemon=True).start()
 
 # 2. MACHINE LEARNING SETUP
 # Load the face-free LSTM model
 model = load_model('action2.keras') 
 
-DATA_PATH = os.path.join('dataset')
+DATA_PATH = os.path.join('datasetV')
 actions = np.array(sorted(os.listdir(DATA_PATH))) if os.path.exists(DATA_PATH) else []
 print(f"Loaded labels: {actions}")
 
@@ -97,9 +122,8 @@ def process_translation(raw_words):
         
         print(f"[API SUCCESS] Translated: {final_translation}\n")
         
-        # Speak the translation out loud
-        engine.say(final_translation)
-        engine.runAndWait()
+        # PUT THE TEXT IN THE QUEUE (Do not use engine.say here anymore!)
+        speech_queue.put(final_translation)
         
     except Exception as e:
         print(f"[API ERROR] {e}")
