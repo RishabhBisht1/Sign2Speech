@@ -17,7 +17,7 @@ mp_drawing=mp.solutions.drawing_utils
 
 # we use shoulders as anchor point so even if the signs are made on sides of camera it still works
 def extract_keypoints(results):
-    # --- 1. FIND THE ANCHOR POINT (Chest) ---
+    # --- 1. FIND THE ANCHOR POINT ---
     if results.pose_landmarks:
         l_shoulder = results.pose_landmarks.landmark[11]
         r_shoulder = results.pose_landmarks.landmark[12]
