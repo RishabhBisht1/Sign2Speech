@@ -4,7 +4,8 @@
 import cv2
 import numpy as np
 import os
-from tensorflow.keras.models import load_model
+import tensorflow as tf
+load_model = tf.keras.models.load_model
 import mediapipe as mp
 
 model = load_model('action2.keras')
@@ -24,6 +25,7 @@ mp_drawing = mp.solutions.drawing_utils
 # --- VARIABLES ---
 sequence = []
 sentence = []      # ADDED THIS BACK
+predictions = []
 threshold = 0.7 
 
 # Variables for Motion Detection
@@ -92,53 +94,37 @@ with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=
         mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_holistic.POSE_CONNECTIONS)
 
         # --- PREDICTION LOGIC ---
-        if results.left_hand_landmarks or results.right_hand_landmarks:
-            keypoints = extract_keypoints(results)
-            
-            # 1. Motion Detection Trigger
-            if previous_keypoints is not None:
-                movement = np.mean(np.abs(keypoints - previous_keypoints))
-                
-                if not is_recording and movement > motion_threshold:
-                    is_recording = True
-                    sequence = [] # Clear old data
-            
-            previous_keypoints = keypoints 
+        keypoints = extract_keypoints(results)
+        
+        # 1. Continuous Rolling Buffer: Append new frame, keep only the last 30
+        sequence.append(keypoints)
+        sequence = sequence[-30:]
 
-            # 2. Sequence Building
-            if is_recording:
-                sequence.append(keypoints)
-                cv2.putText(image, f"Recording Sign... {len(sequence)}/30", (10, 70), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
-                
-                # 3. Predict exactly when we hit 30 frames
-                if len(sequence) == 30:
-                    res = model.predict(np.expand_dims(sequence, axis=0), verbose=0)[0]
-                    
-                    best_class_index = np.argmax(res)
-                    confidence = res[best_class_index]
-                    prediction = actions[best_class_index]
-                    
-                    if confidence > threshold:
-                        if len(sentence) > 0:
-                            if prediction != sentence[-1]:
-                                sentence.append(prediction)
-                        else:
+        # 2. Predict continuously whenever we have a full 30-frame window
+        if len(sequence) == 30:
+            res = model.predict(np.expand_dims(sequence, axis=0), verbose=0)[0]
+            
+            best_class_index = np.argmax(res)
+            confidence = res[best_class_index]
+            prediction = actions[best_class_index]
+            
+            predictions.append(best_class_index)
+            
+            # Draw confidence on screen for debugging
+            cv2.putText(image, f"Predicting: {prediction} ({confidence*100:.1f}%)", (10, 70), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+            
+            # Check for stability (same prediction for last 5 frames), high confidence, and hand presence
+            if len(predictions) >= 5 and len(set(predictions[-5:])) == 1:
+                if confidence > 0.85 and (results.left_hand_landmarks or results.right_hand_landmarks):
+                    if len(sentence) > 0:
+                        if prediction != sentence[-1]:
                             sentence.append(prediction)
+                    else:
+                        sentence.append(prediction)
 
-                    if len(sentence) > 5:
-                        sentence = sentence[-5:]
-                    
-                    # Reset after predicting
-                    is_recording = False
-                    sequence = [] 
-        else:
-            # If hands disappear, reset tracker
-            previous_keypoints = None
-            is_recording = False
-            sequence = []
-            cv2.putText(image, "Waiting for hands...", (10, 70), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
+            if len(sentence) > 5:
+                sentence = sentence[-5:]
 
         # UI Updates
         cv2.rectangle(image, (0,0), (640, 40), (245, 117, 16), -1)

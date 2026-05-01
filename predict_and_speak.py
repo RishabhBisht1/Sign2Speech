@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 1. API & NLP SETUP
+# 1. API and NLP Setup ( we usd genAI here)
 genai.configure(api_key=os.getenv("API_KEY"))
 
 system_instruction = """
@@ -74,6 +74,7 @@ mp_drawing = mp.solutions.drawing_utils
 # Variables for LSTM & Motion Detection
 sequence = []
 sentence = []      
+predictions = []
 threshold = 0.7 
 previous_keypoints = None
 motion_threshold = 0.03 
@@ -81,7 +82,7 @@ is_recording = False
 
 # Variables for NLP Timeout
 last_sign_time = time.time()
-silence_timeout = 2.0 # 2 Seconds of silence triggers translation
+silence_timeout = 4.0 # Increased to 8 seconds to give you more time after the final gesture before translating
 final_translation = "Waiting for signs..."
 is_translating = False # Prevents spamming the API
 
@@ -154,46 +155,85 @@ with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=
         mp_drawing.draw_landmarks(image, results.left_hand_landmarks, mp_holistic.HAND_CONNECTIONS)
         mp_drawing.draw_landmarks(image, results.right_hand_landmarks, mp_holistic.HAND_CONNECTIONS)
         mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_holistic.POSE_CONNECTIONS)
+        # --- ACTIVE ZONE (IDLE DETECTION) ---
+        active_zone_y = 0.85 # Default: bottom 15% of screen is considered "resting"
+        if results.pose_landmarks:
+            # Calculate midpoint of shoulders
+            shoulder_y = (results.pose_landmarks.landmark[11].y + results.pose_landmarks.landmark[12].y) / 2
+            # Active zone ends just below the chest. Hands must be above this line to predict.
+            active_zone_y = shoulder_y + 0.35 
+            
+        # Draw the Active Zone line in red
+        h, w, _ = image.shape
+        pixel_y = int(active_zone_y * h)
+        cv2.line(image, (0, pixel_y), (w, pixel_y), (0, 0, 255), 2)
+        cv2.putText(image, "Active Zone (Sign Above This Line)", (10, pixel_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+
+        # Check globally if hands are raised
+        hands_are_active = False
+        if results.left_hand_landmarks and results.left_hand_landmarks.landmark[0].y < active_zone_y:
+            hands_are_active = True
+        if results.right_hand_landmarks and results.right_hand_landmarks.landmark[0].y < active_zone_y:
+            hands_are_active = True
+
+        # Keep the timer continuously resetting AS LONG AS hands are up. 
+        # This completely prevents the code from translating prematurely while you are signing!
+        if hands_are_active:
+            last_sign_time = time.time()
 
         # --- PREDICTION LOGIC ---
-        if results.left_hand_landmarks or results.right_hand_landmarks:
-            keypoints = extract_keypoints(results)
-            
-            # Motion Detection Trigger
-            if previous_keypoints is not None:
-                movement = np.mean(np.abs(keypoints - previous_keypoints))
-                if not is_recording and movement > motion_threshold:
-                    is_recording = True
-                    sequence = [] 
-            
-            previous_keypoints = keypoints 
-
-            # Sequence Building
-            if is_recording:
-                sequence.append(keypoints)
-                cv2.putText(image, f"Recording Sign... {len(sequence)}/30", (10, 150), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+        keypoints = extract_keypoints(results)
+        
+        # Continuous Rolling Buffer: Append new frame, keep only the last 30
+        sequence.append(keypoints)
+        sequence = sequence[-30:]
+        
+        # Predict continuously whenever we have a full 30-frame window
+        if len(sequence) == 30:
+            if hands_are_active:
+                # Check if there is actual movement in the sequence
+                sequence_np = np.array(sequence)
+                # Calculate movement as the mean of standard deviation of keypoints over the 30 frames
+                motion_amount = np.mean(np.std(sequence_np, axis=0))
                 
-                # Predict at 30 frames
-                if len(sequence) == 30:
+                # Only predict if there's enough movement (filtering out completely still hands)
+                # You can adjust this threshold if it's too sensitive or not sensitive enough
+                if motion_amount > 0.005:
                     res = model.predict(np.expand_dims(sequence, axis=0), verbose=0)[0]
                     best_class_index = np.argmax(res)
                     confidence = res[best_class_index]
                     prediction = actions[best_class_index]
                     
-                    if confidence > threshold:
-                        # Append word if it's new, and RESET the 2-second timer
-                        if len(sentence) == 0 or prediction != sentence[-1]:
-                            sentence.append(prediction)
-                            last_sign_time = time.time() 
-                            print(f"Detected: {prediction}")
+                    predictions.append(best_class_index)
+                    predictions = predictions[-20:] # Keep buffer size manageable
+                    
+                    # Draw confidence on screen for debugging
+                    cv2.putText(image, f"Predicting: {prediction} ({confidence*100:.1f}%)", (10, 150), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+                    
+                    # Check for stability (same prediction for last 5 frames) and high confidence
+                    if len(predictions) >= 5 and len(set(predictions[-5:])) == 1:
 
-                    is_recording = False
-                    sequence = [] 
-        else:
-            previous_keypoints = None
-            is_recording = False
-            sequence = []
+                        if confidence > 0.90:
+
+                            # Append word if it's new
+                            if len(sentence) == 0 or prediction != sentence[-1]:
+                                sentence.append(prediction)
+                                print(f"Detected: {prediction}")
+                                
+                                # Keep 25 frames in sequence. It only takes 5 frames to predict the next gesture!
+                                # This makes chaining extremely fast.
+                                sequence = sequence[-25:]
+                                predictions = []
+                else:
+                    cv2.putText(image, "Hands Still (No Movement)", (10, 150), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
+            else:
+                # If hands are below the red line, clear the predictions buffer
+                # so that when hands are raised again, we wait for 5 consistent frames
+                predictions = []
+                cv2.putText(image, "Hands resting (Below Active Zone)", (10, 150), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
 
         # --- NLP TRANSLATION TRIGGER ---
         # If we have words, 2 seconds have passed since the last sign, and we aren't currently translating
